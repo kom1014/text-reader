@@ -624,7 +624,7 @@ function speakCurrent() {
     return;
   }
 
-  const chunks = splitText(text, 180);
+  const chunks = splitText(text, 80);
   speakChunks(chunks, 0);
 }
 
@@ -780,10 +780,18 @@ clearAllBtn.addEventListener('click', () => {
   renderLibrary();
 });
 
-// Chrome mobile 長時間再生対策
+// Chrome 長時間再生停止バグ対策（5秒ごとにnudge）
 setInterval(() => {
-  if (synth.speaking && !synth.paused) { synth.pause(); synth.resume(); }
-}, 10000);
+  if (isPlaying && !isPaused) {
+    if (synth.speaking) {
+      synth.pause();
+      synth.resume();
+    } else {
+      // synthが止まってるのにisPlayingがtrueなら再開
+      speakCurrent();
+    }
+  }
+}, 5000);
 
 // ===== 初期化 =====
 loadSettings();
