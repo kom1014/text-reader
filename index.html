@@ -612,20 +612,62 @@ function updateProgress() {
 }
 
 // ===== 音声合成 =====
+// 全テキストをキューに展開して順番に話す
+let utteranceQueue = [];
+let queueIndex = 0;
+
+function buildQueue() {
+  utteranceQueue = [];
+  queueIndex = 0;
+  for (let i = 0; i < paragraphs.length; i++) {
+    const chunks = splitText(paragraphs[i], 30);
+    chunks.forEach(c => utteranceQueue.push({ text: c, paraIndex: i }));
+  }
+}
+
 function speakCurrent() {
   if (paragraphs.length === 0) return;
   synth.cancel();
   isPlaying = true;
   isPaused = false;
 
-  const text = paragraphs[currentIndex];
-  if (!text || !text.trim()) {
-    advance();
-    return;
+  // キューを再構築して現在の段落から開始
+  buildQueue();
+  queueIndex = utteranceQueue.findIndex(q => q.paraIndex >= currentIndex);
+  if (queueIndex < 0) queueIndex = 0;
+
+  speakNext();
+}
+
+function speakNext() {
+  if (!isPlaying || isPaused) return;
+  if (queueIndex >= utteranceQueue.length) { finishPlaying(); return; }
+
+  const item = utteranceQueue[queueIndex];
+  if (item.paraIndex !== currentIndex) {
+    currentIndex = item.paraIndex;
+    highlightCurrent();
   }
 
-  const chunks = splitText(text, 80);
-  speakChunks(chunks, 0);
+  const utt = new SpeechSynthesisUtterance(item.text);
+  const vi = parseInt(voiceSelect.value);
+  if (!isNaN(vi) && voices[vi]) utt.voice = voices[vi];
+  utt.rate  = parseFloat(rateSlider.value);
+  utt.pitch = parseFloat(pitchSlider.value);
+
+  utt.onend = () => {
+    if (!isPlaying || isPaused) return;
+    queueIndex++;
+    speakNext();
+  };
+  utt.onerror = (e) => {
+    if (e.error === 'canceled') return;
+    queueIndex++;
+    setTimeout(speakNext, 50);
+  };
+
+  setPlayState(true);
+  synth.speak(utt);
 }
 
 function advance() {
@@ -639,38 +681,19 @@ function advance() {
 }
 
 function splitText(text, max) {
-  if (text.length <= max) return [text];
-  const chunks = [];
-  let rem = text;
-  while (rem.length > 0) {
-    if (rem.length <= max) { chunks.push(rem); break; }
-    let at = -1;
-    for (let i = max; i >= max / 2; i--) {
-      if ('。、．，.!！?？'.includes(rem[i])) { at = i + 1; break; }
+  // 句読点で区切る（30文字以下）
+  const result = [];
+  const delimiters = /[。、．，！？!?]/;
+  let buf = '';
+  for (const ch of text) {
+    buf += ch;
+    if (delimiters.test(ch) || buf.length >= max) {
+      result.push(buf);
+      buf = '';
     }
-    if (at === -1) at = max;
-    chunks.push(rem.slice(0, at));
-    rem = rem.slice(at);
   }
-  return chunks;
-}
-
-function speakChunks(chunks, idx) {
-  if (!isPlaying && !isPaused) return;
-  if (idx >= chunks.length) { advance(); return; }
-
-  const utt = new SpeechSynthesisUtterance(chunks[idx]);
-  const vi = parseInt(voiceSelect.value);
-  if (!isNaN(vi) && voices[vi]) utt.voice = voices[vi];
-  utt.rate  = parseFloat(rateSlider.value);
-  utt.pitch = parseFloat(pitchSlider.value);
-
-  utt.onend   = () => speakChunks(chunks, idx + 1);
-  utt.onerror = (e) => { if (e.error !== 'canceled') speakChunks(chunks, idx + 1); };
-
-  isPlaying = true; isPaused = false;
-  setPlayState(true);
-  synth.speak(utt);
+  if (buf) result.push(buf);
+  return result.filter(s => s.trim());
 }
 
 function setPlayState(playing) {
@@ -716,16 +739,20 @@ playBtn.addEventListener('click', () => {
 
 prevBtn.addEventListener('click', () => {
   if (!paragraphs.length) return;
+  const wasPlaying = isPlaying;
   stopSpeaking();
   currentIndex = Math.max(0, currentIndex - 1);
   highlightCurrent();
+  if (wasPlaying) speakCurrent();
 });
 
 nextBtn.addEventListener('click', () => {
   if (!paragraphs.length) return;
+  const wasPlaying = isPlaying;
   stopSpeaking();
   currentIndex = Math.min(paragraphs.length - 1, currentIndex + 1);
   highlightCurrent();
+  if (wasPlaying) speakCurrent();
 });
 
 progressBar.addEventListener('click', (e) => {
@@ -780,18 +807,12 @@ clearAllBtn.addEventListener('click', () => {
   renderLibrary();
 });
 
-// Chrome 長時間再生停止バグ対策（5秒ごとにnudge）
+// Chrome 停止バグ watchdog: 3秒ごとにチェックして止まってたら再開
 setInterval(() => {
-  if (isPlaying && !isPaused) {
-    if (synth.speaking) {
-      synth.pause();
-      synth.resume();
-    } else {
-      // synthが止まってるのにisPlayingがtrueなら再開
-      speakCurrent();
-    }
+  if (isPlaying && !isPaused && !synth.speaking) {
+    speakNext();
   }
-}, 5000);
+}, 3000);
 
 // ===== 初期化 =====
 loadSettings();
