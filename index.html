@@ -615,6 +615,8 @@ function updateProgress() {
 function speakCurrent() {
   if (paragraphs.length === 0) return;
   synth.cancel();
+  isPlaying = true;
+  isPaused = false;
 
   const text = paragraphs[currentIndex];
   if (!text || !text.trim()) {
